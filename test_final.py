@@ -2,7 +2,7 @@ import numpy as np
 import xarray as xr
 from scipy.ndimage import gaussian_filter
 
-# File path (based on your provided location)
+# File path 
 input_file = "/fs/ess/PAS2856/SPEEDY_ensemble_data/reference_ens/201101010000.nc"
 
 # Open the netCDF file
@@ -23,56 +23,57 @@ if not lat_var or not lon_var:
 latitude = ds[lat_var]
 longitude = ds[lon_var]
 
-# Select variables to decompose (e.g., u, v, w, ps)
+# Variables to decompose ( u, v, w, ps)
 variables = ["u", "v", "w", "ps"]
 data_vars = {var: ds[var] for var in variables if var in ds}
 
 if not data_vars:
     raise ValueError("No matching variables (u, v, w, ps) found in the dataset.")
 
-# Function to decompose data into scales
-def decompose_scales(data, lat_dim, lon_dim):
-    """
-    Decompose data into large, medium, and small scales using Gaussian filters.
-    """
-    # Large-scale (smooth with high sigma)
-    large_scale = gaussian_filter(data, sigma=10, mode="nearest")
+# Convert to float function
+def convert_to_float(array):
+    try:
+        return np.array(array, dtype=np.float64)
+    except Exception as e:
+        print(f"Error converting array to float: {e}")
+        return np.zeros_like(array, dtype=np.float64)
 
-    # Medium-scale (subtract large-scale, then smooth with lower sigma)
-    medium_scale_intermediate = data - large_scale
-    medium_scale = gaussian_filter(medium_scale_intermediate, sigma=5, mode="nearest")
+# Function to decompose data into scales using variance
+def decompose_scales(data_vars):
+    large_scale_vars = {}
+    medium_scale_vars = {}
+    small_scale_vars = {}
 
-    # Small-scale (subtract large and medium from the original)
-    small_scale = data - (large_scale + medium_scale)
+    for var_name, var_data in data_vars.items():
+        print(f"Processing variable: {var_name}")
 
-    return large_scale, medium_scale, small_scale
+        # Convert to NumPy array for processing
+        data_array = convert_to_float(var_data.values)
 
-# Perform decomposition for each variable and save to separate files
-large_scale_vars = {}
-medium_scale_vars = {}
-small_scale_vars = {}
+        # Decompose data into large, medium, and small scales
+        large_scale = np.mean(data_array, axis=(2, 3))  # Large scale computation (mean over specified dimensions)
+        medium_scale_intermediate = data_array - large_scale  # Intermediate step
+        medium_scale = np.var(medium_scale_intermediate, axis=(2, 3))  # Medium scale computation (variance over specified dimensions)
+        small_scale = data_array - (large_scale + medium_scale)  # Small scale computation (residual)
 
-for var_name, var_data in data_vars.items():
-    print(f"Processing variable: {var_name}")
+        # Convert results back to xarray.DataArray
+        dims = var_data.dims
+        coords = var_data.coords
+        large_scale_vars[var_name] = xr.DataArray(large_scale, dims=dims, coords=coords)
+        medium_scale_vars[var_name] = xr.DataArray(medium_scale, dims=dims, coords=coords)
+        small_scale_vars[var_name] = xr.DataArray(small_scale, dims=dims, coords=coords)
 
-    # Convert to NumPy array for processing
-    data = var_data.values
-    dims = var_data.dims
+    return large_scale_vars, medium_scale_vars, small_scale_vars
 
-    # Decompose scales
-    large, medium, small = decompose_scales(data, lat_dim=lat_var, lon_dim=lon_var)
-
-    # Convert results back to xarray.DataArray
-    large_scale_vars[var_name] = xr.DataArray(large, dims=dims, coords=var_data.coords)
-    medium_scale_vars[var_name] = xr.DataArray(medium, dims=dims, coords=var_data.coords)
-    small_scale_vars[var_name] = xr.DataArray(small, dims=dims, coords=var_data.coords)
+# Perform decomposition
+large_scale_vars, medium_scale_vars, small_scale_vars = decompose_scales(data_vars)
 
 # Save decomposed data to separate netCDF files
+output_dir = "/fs/ess/PAS2856/SPEEDY_ensemble_data/decomposed_scales/"
 large_ds = xr.Dataset(large_scale_vars, coords=ds.coords)
 medium_ds = xr.Dataset(medium_scale_vars, coords=ds.coords)
 small_ds = xr.Dataset(small_scale_vars, coords=ds.coords)
 
-output_dir = "/fs/ess/PAS2856/SPEEDY_ensemble_data/decomposed_scales/"
 large_ds.to_netcdf(f"{output_dir}large_scale_output.nc")
 medium_ds.to_netcdf(f"{output_dir}medium_scale_output.nc")
 small_ds.to_netcdf(f"{output_dir}small_scale_output.nc")
