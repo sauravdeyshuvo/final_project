@@ -1,8 +1,8 @@
 import numpy as np
 import xarray as xr
-from scipy.ndimage import gaussian_filter
+import pyshtools as pysh
 
-# File path 
+# File path (based on your provided location)
 input_file = "/fs/ess/PAS2856/SPEEDY_ensemble_data/reference_ens/201101010000.nc"
 
 # Open the netCDF file
@@ -23,7 +23,7 @@ if not lat_var or not lon_var:
 latitude = ds[lat_var]
 longitude = ds[lon_var]
 
-# Variables to decompose ( u, v, w, ps)
+# Select variables to decompose (e.g., u, v, w, ps)
 variables = ["u", "v", "w", "ps"]
 data_vars = {var: ds[var] for var in variables if var in ds}
 
@@ -38,7 +38,40 @@ def convert_to_float(array):
         print(f"Error converting array to float: {e}")
         return np.zeros_like(array, dtype=np.float64)
 
-# Function to decompose data into scales using variance
+# Function to perform three-scale decomposition using spherical harmonics
+def three_scale_decomposition(data2d):
+    """
+    Decompose a 2D array (data2d) into three spatial scale bands:
+    - Large scale (low frequencies)
+    - Medium scale (intermediate frequencies)
+    - Small scale (high frequencies)
+    """
+    
+    # Perform spherical harmonic expansion
+    geopot_coeffs = pysh.expand.SHExpandDH(data2d)
+    
+    # Filter for large scale (0 to 7)
+    geopot_coeffs_large = geopot_coeffs.copy()
+    lmax_large = 7
+    geopot_coeffs_large[:, lmax_large+1:, :] = 0
+    data_large_band_2d = pysh.expand.MakeGridDH(geopot_coeffs_large, sampling=1)
+    
+    # Filter for medium scale (8 to 16)
+    geopot_coeffs_medium = geopot_coeffs.copy()
+    lmin_medium, lmax_medium = 8, 16
+    geopot_coeffs_medium[:, :lmin_medium, :] = 0
+    geopot_coeffs_medium[:, lmax_medium+1:, :] = 0
+    data_medium_band_2d = pysh.expand.MakeGridDH(geopot_coeffs_medium, sampling=1)
+    
+    # Filter for small scale (l > 16)
+    geopot_coeffs_small = geopot_coeffs.copy()
+    lmin_small = 16
+    geopot_coeffs_small[:, :lmin_small, :] = 0
+    data_small_band_2d = pysh.expand.MakeGridDH(geopot_coeffs_small, sampling=1)
+    
+    return data_large_band_2d, data_medium_band_2d, data_small_band_2d
+
+# Function to decompose data into scales using the methods from the spherical harmonics code
 def decompose_scales(data_vars):
     large_scale_vars = {}
     medium_scale_vars = {}
@@ -50,11 +83,8 @@ def decompose_scales(data_vars):
         # Convert to NumPy array for processing
         data_array = convert_to_float(var_data.values)
 
-        # Decompose data into large, medium, and small scales
-        large_scale = np.mean(data_array, axis=(2, 3))  # Large scale computation (mean over specified dimensions)
-        medium_scale_intermediate = data_array - large_scale  # Intermediate step
-        medium_scale = np.var(medium_scale_intermediate, axis=(2, 3))  # Medium scale computation (variance over specified dimensions)
-        small_scale = data_array - (large_scale + medium_scale)  # Small scale computation (residual)
+        # Perform three-scale decomposition
+        large_scale, medium_scale, small_scale = three_scale_decomposition(data_array)
 
         # Convert results back to xarray.DataArray
         dims = var_data.dims
